@@ -2,15 +2,19 @@ import { create } from 'zustand';
 import { Chess } from 'chess.js';
 import type { Move } from 'chess.js';
 import { findBestMove } from '../game/ai';
+import { modelUrlFor } from '../three/assets';
 import type {
   Burst,
   Color,
+  DyingActor,
   GameMode,
   GameStatus,
   PieceEntity,
   PieceSymbol,
   Square,
 } from '../game/types';
+
+const ATTACK_MS = 700;
 
 let entitySeq = 1;
 let burstSeq = 1;
@@ -58,6 +62,7 @@ interface GameState {
   history: string[];
   lastMove: { from: Square; to: Square } | null;
   bursts: Burst[];
+  dying: DyingActor[];
   thinking: boolean;
   promotion: { from: Square; to: Square } | null;
 
@@ -69,6 +74,7 @@ interface GameState {
   cancelPromotion: () => void;
   maybeRunAi: () => void;
   removeBurst: (id: number) => void;
+  removeDying: (id: number) => void;
 }
 
 export const useGame = create<GameState>((set, get) => ({
@@ -87,6 +93,7 @@ export const useGame = create<GameState>((set, get) => ({
   history: [],
   lastMove: null,
   bursts: [],
+  dying: [],
   thinking: false,
   promotion: null,
 
@@ -110,6 +117,7 @@ export const useGame = create<GameState>((set, get) => ({
       history: [],
       lastMove: null,
       bursts: [],
+      dying: [],
       thinking: false,
       promotion: null,
     });
@@ -169,6 +177,7 @@ export const useGame = create<GameState>((set, get) => ({
     const entities = get().entities.map((e) => ({ ...e }));
     const mover = entities.find((e) => e.square === from);
     let burst: Burst | null = null;
+    let dyingActor: DyingActor | null = null;
 
     if (result.flags.includes('c') || result.flags.includes('e')) {
       let capSquare: Square = to;
@@ -178,7 +187,12 @@ export const useGame = create<GameState>((set, get) => ({
       const capIndex = entities.findIndex((e) => e.square === capSquare && e !== mover);
       if (capIndex >= 0) {
         const cap = entities[capIndex];
-        burst = { id: burstSeq++, square: capSquare, type: cap.type, color: cap.color };
+        // Rigged characters die via their death clip; stone pieces shatter into debris.
+        if (modelUrlFor(cap.color, cap.type)) {
+          dyingActor = { id: burstSeq++, square: capSquare, type: cap.type, color: cap.color };
+        } else {
+          burst = { id: burstSeq++, square: capSquare, type: cap.type, color: cap.color };
+        }
         entities.splice(capIndex, 1);
       }
     }
@@ -186,6 +200,7 @@ export const useGame = create<GameState>((set, get) => ({
     if (mover) {
       mover.square = to;
       if (result.flags.includes('p') && result.promotion) mover.type = result.promotion;
+      if (burst || dyingActor) mover.attackingUntil = performance.now() + ATTACK_MS;
     }
 
     if (result.flags.includes('k')) {
@@ -211,6 +226,7 @@ export const useGame = create<GameState>((set, get) => ({
       legalTargets: [],
       promotion: null,
       bursts: burst ? [...get().bursts, burst] : get().bursts,
+      dying: dyingActor ? [...get().dying, dyingActor] : get().dying,
     });
 
     if (!chess.isGameOver()) {
@@ -239,6 +255,8 @@ export const useGame = create<GameState>((set, get) => ({
   },
 
   removeBurst: (id) => set({ bursts: get().bursts.filter((b) => b.id !== id) }),
+
+  removeDying: (id) => set({ dying: get().dying.filter((d) => d.id !== id) }),
 }));
 
 if (import.meta.env.DEV) {

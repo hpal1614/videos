@@ -1,35 +1,62 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import * as THREE from 'three';
+import type { AnimState } from '../game/types';
 
 interface Props {
   url: string;
-  selected: boolean;
-  moving: boolean;
+  anim: AnimState;
+  scale?: number;
 }
 
-/** Renders a rigged glTF character and drives its idle/walk clips. */
-export function RiggedPiece({ url, selected, moving }: Props) {
+/**
+ * Renders a rigged glTF character (Draco/meshopt supported) and plays the clip
+ * matching `anim`. Clip names are matched case-insensitively by substring, so
+ * standard Mixamo exports ("Idle", "Walking", "Sword And Shield Slash",
+ * "Sword And Shield Death") resolve automatically. Missing clips fall back to
+ * idle / the first available clip.
+ */
+export function RiggedPiece({ url, anim, scale = 0.5 }: Props) {
   const group = useRef<THREE.Group>(null);
-  const { scene, animations } = useGLTF(url);
+  const { scene, animations } = useGLTF(url, true, true);
+  const cloned = useMemo(() => skeletonClone(scene), [scene]);
   const { actions, names } = useAnimations(animations, group);
 
   useEffect(() => {
-    const pick = (kw: string) => names.find((n) => n.toLowerCase().includes(kw));
-    const idle = pick('idle') ?? names[0];
-    const walk = pick('walk') ?? pick('run') ?? idle;
-    const target = moving ? walk : idle;
-    if (!target) return;
-    const action = actions[target];
-    action?.reset().fadeIn(0.2).play();
+    cloned.traverse((o) => {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    });
+  }, [cloned]);
+
+  useEffect(() => {
+    const pick = (...kws: string[]) =>
+      names.find((n) => kws.some((kw) => n.toLowerCase().includes(kw))) ?? names[0];
+    const name =
+      anim === 'walk'
+        ? pick('walk', 'run', 'idle')
+        : anim === 'attack'
+          ? pick('attack', 'slash', 'punch', 'kick', 'idle')
+          : anim === 'death'
+            ? pick('death', 'die', 'dying', 'idle')
+            : pick('idle');
+    if (!name) return;
+    const action = actions[name];
+    if (!action) return;
+    const once = anim === 'attack' || anim === 'death';
+    action.reset();
+    action.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
+    action.clampWhenFinished = once;
+    action.fadeIn(0.15).play();
     return () => {
-      action?.fadeOut(0.2);
+      action.fadeOut(0.2);
     };
-  }, [actions, names, moving]);
+  }, [actions, names, anim]);
 
   return (
     <group ref={group}>
-      <primitive object={scene} scale={selected ? 0.92 : 0.85} />
+      <primitive object={cloned} scale={scale} />
     </group>
   );
 }

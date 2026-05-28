@@ -4,6 +4,7 @@ import { Board } from './Board';
 import { Pieces } from './Pieces';
 import { AmbientParticles } from './Particles';
 import { CaptureBurst } from './CaptureBurst';
+import { DyingPiece } from './DyingPiece';
 import { Effects } from './Effects';
 import { useGame } from '../state/store';
 
@@ -13,6 +14,17 @@ function Bursts() {
     <>
       {bursts.map((b) => (
         <CaptureBurst key={b.id} burst={b} />
+      ))}
+    </>
+  );
+}
+
+function DyingActors() {
+  const dying = useGame((s) => s.dying);
+  return (
+    <>
+      {dying.map((d) => (
+        <DyingPiece key={d.id} actor={d} />
       ))}
     </>
   );
@@ -59,6 +71,7 @@ export function Scene() {
       <Pieces />
       <AmbientParticles />
       <Bursts />
+      <DyingActors />
 
       <OrbitControls
         target={[0, 0, 0]}

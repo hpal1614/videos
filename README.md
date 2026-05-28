@@ -23,6 +23,25 @@ npm run build
 npm run preview
 ```
 
+## Run on iOS & Android (Capacitor)
+
+The same web build is packaged as native apps with [Capacitor](https://capacitorjs.com/).
+The `android/` and `ios/` native projects are generated on your machine (they
+need the Android SDK / Xcode, and iOS requires macOS), so they aren't committed:
+
+```bash
+# one-time, per platform:
+npx cap add android
+npx cap add ios
+
+# build the web app + copy it into the native shells + open the IDE:
+npm run cap:android   # opens Android Studio
+npm run cap:ios       # opens Xcode (macOS only)
+```
+
+`npm run cap:sync` rebuilds and syncs both platforms without opening an IDE.
+The web app keeps working as-is — Capacitor just adds the native wrappers.
+
 ## How to play
 
 - **Drag** to orbit the board, **scroll** to zoom.
@@ -41,28 +60,55 @@ npm run preview
   spark/dust puff, and a fading flash.
 - Ambient drifting embers, dynamic lighting, fog, bloom, and vignette.
 
-## Upgrading to rigged characters
+## Rigged characters (e.g. a sword-swinging pawn)
 
-The renderer already supports swapping the procedural pieces for **rigged glTF
-characters** (e.g. a pawn that swings a sword). It uses the built-in stone
-pieces until you provide models.
+The renderer supports swapping the procedural pieces for **rigged glTF
+characters**. The loader and the idle / walk / **attack** / **death** hooks are
+already wired: when a piece moves it plays `walk`, when it captures it plays
+`attack`, and a captured rigged piece plays its `death` clip before despawning.
+Any piece without a mapped model falls back to the stone mesh, so you can
+upgrade one piece at a time.
 
-1. Get rigged, animated models. Free sources that work well:
-   - **Mixamo** (free, rigged humanoids + `idle`/`walk`/`attack`/`death` clips) —
-     download as glTF/`.glb`.
-   - **Quaternius** / **Kenney** / **Sketchfab** (filter to CC0 / free).
-2. Drop the files into `public/models/`.
-3. Map them in `src/three/assets.ts`:
+### 1. Get a model (Mixamo etc.)
 
-   ```ts
-   export const MODEL_URLS: ModelMap = {
-     w: { p: '/models/white-pawn.glb', n: '/models/white-knight.glb' },
-     b: { p: '/models/black-pawn.glb' },
-   };
-   ```
+Mixamo characters are free and rigged with the clips we need. One model is
+**reused for every piece of that type/colour** (all 8 pawns share one file), so
+you only need a handful of models.
 
-Each model should contain clips whose names contain `idle`, `walk`, `attack`,
-or `death` (case-insensitive). `src/three/RiggedPiece.tsx` drives idle/walk
-automatically; extend it to trigger `attack`/`death` from capture events for
-full combat animations. Any piece without a mapped model falls back to the
-stone mesh, so you can upgrade pieces one at a time.
+### 2. Trim + compress (fixes the "44 MB" problem)
+
+A raw Mixamo export with dozens of clips is huge and shouldn't go in git. Keep
+only ~4 clips and compress — this typically takes a model from tens of MB down
+to **~2–5 MB**:
+
+```bash
+npx @gltf-transform/cli optimize raw-pawn.glb pawn.glb \
+  --compress draco --texture-compress webp
+```
+
+(Keep clips named so they contain `idle`, `walk`, `attack`/`slash`, and
+`death` — matched case-insensitively. Draco- and meshopt-compressed models are
+both supported.)
+
+### 3. Host the models (CDN, not git)
+
+Upload the optimized files to a CDN / blob store (Cloudflare R2, Vercel Blob, a
+GitHub Release asset, …). Point the app at it with a `.env` file:
+
+```
+VITE_ASSET_BASE_URL=https://cdn.example.com/wizards-chess
+```
+
+### 4. Map them in `src/three/assets.ts`
+
+```ts
+export const MODEL_URLS: ModelMap = {
+  w: { p: 'models/white-pawn.glb', n: 'models/white-knight.glb' },
+  b: { p: 'models/black-pawn.glb' },
+};
+```
+
+Relative paths resolve against `VITE_ASSET_BASE_URL` (or `public/` if unset);
+absolute `https://` URLs are used verbatim. Tune per-piece `scale` and facing
+in `src/three/RiggedPiece.tsx` / `Piece.tsx` if your model faces the wrong way
+or is the wrong size.

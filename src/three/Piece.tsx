@@ -6,7 +6,7 @@ import { modelUrlFor } from './assets';
 import { RiggedPiece } from './RiggedPiece';
 import { squareToWorld } from '../game/board';
 import { useGame } from '../state/store';
-import type { PieceEntity } from '../game/types';
+import type { AnimState, PieceEntity } from '../game/types';
 
 interface Props {
   entity: PieceEntity;
@@ -32,7 +32,14 @@ export function Piece({ entity, selected }: Props) {
   useEffect(() => () => material.dispose(), [material]);
 
   const phase = useMemo(() => Math.random() * Math.PI * 2, []);
-  const baseRotY = entity.type === 'n' && entity.color === 'w' ? Math.PI : 0;
+  const url = modelUrlFor(entity.color, entity.type);
+  const baseRotY = url
+    ? entity.color === 'w'
+      ? Math.PI // rigged: white faces the enemy (-z); flip if your model faces the other way
+      : 0
+    : entity.type === 'n' && entity.color === 'w'
+      ? Math.PI
+      : 0;
   const target = useRef(new THREE.Vector3());
   const prevSquare = useRef(entity.square);
   const movingUntil = useRef(0);
@@ -69,14 +76,19 @@ export function Piece({ entity, selected }: Props) {
     onSquareClick(entity.square);
   };
 
-  const url = modelUrlFor(entity.color, entity.type);
-  const moving = movingUntil.current > performance.now();
+  const now = performance.now();
+  const anim: AnimState =
+    entity.attackingUntil && entity.attackingUntil > now
+      ? 'attack'
+      : movingUntil.current > now
+        ? 'walk'
+        : 'idle';
 
   return (
     <group ref={group} onPointerDown={handleDown}>
       {url ? (
         <Suspense fallback={null}>
-          <RiggedPiece url={url} selected={selected} moving={moving} />
+          <RiggedPiece url={url} anim={anim} />
         </Suspense>
       ) : (
         <mesh geometry={geometry} material={material} castShadow receiveShadow scale={0.92} />
