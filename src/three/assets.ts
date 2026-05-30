@@ -26,8 +26,8 @@ import type { PieceSymbol } from '../game/types';
 export type ModelMap = Partial<Record<'w' | 'b', Partial<Record<PieceSymbol, string>>>>;
 
 export const MODEL_URLS: ModelMap = {
-  w: { p: 'models/cesium-man.glb' },
-  b: { p: 'models/cesium-man.glb' },
+  w: { p: 'models/paladin.glb' },
+  b: { p: 'models/paladin.glb' },
 };
 
 const BASE = (import.meta.env.VITE_ASSET_BASE_URL ?? '').replace(/\/$/, '');
