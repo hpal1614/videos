@@ -6,7 +6,19 @@ import { modelUrlFor } from './assets';
 import { RiggedPiece } from './RiggedPiece';
 import { squareToWorld } from '../game/board';
 import { useGame } from '../state/store';
-import type { AnimState, PieceEntity } from '../game/types';
+import type { AnimState, PieceEntity, PieceSymbol } from '../game/types';
+
+// Heights for rigged characters, tile width = 1.0. Tuned a touch taller than the
+// procedural pieces so a humanoid silhouette reads as a full chess piece, but
+// kept under the tile width so adjacent pieces don't visually clip.
+const RIGGED_HEIGHT: Record<PieceSymbol, number> = {
+  p: 0.72,
+  r: 0.78,
+  n: 0.85,
+  b: 0.85,
+  q: 0.95,
+  k: 1.05,
+};
 
 interface Props {
   entity: PieceEntity;
@@ -88,7 +100,7 @@ export function Piece({ entity, selected }: Props) {
     <group ref={group} onPointerDown={handleDown}>
       {url ? (
         <Suspense fallback={null}>
-          <RiggedPiece url={url} anim={anim} />
+          <RiggedPiece url={url} anim={anim} targetHeight={RIGGED_HEIGHT[entity.type]} />
         </Suspense>
       ) : (
         <mesh geometry={geometry} material={material} castShadow receiveShadow scale={0.92} />

@@ -7,17 +7,19 @@ import type { AnimState } from '../game/types';
 interface Props {
   url: string;
   anim: AnimState;
-  scale?: number;
+  /** Target height in world units (board tiles are 1 unit). Pieces are auto-fit to this. */
+  targetHeight?: number;
 }
 
 /**
  * Renders a rigged glTF character (Draco/meshopt supported) and plays the clip
- * matching `anim`. Clip names are matched case-insensitively by substring, so
- * standard Mixamo exports ("Idle", "Walking", "Sword And Shield Slash",
- * "Sword And Shield Death") resolve automatically. Missing clips fall back to
- * idle / the first available clip.
+ * matching `anim`. Auto-scales any source model to `targetHeight` and recenters
+ * its feet on the tile, so models of any origin/scale look right out of the box.
+ * Clip names are matched case-insensitively by substring, so standard Mixamo
+ * exports ("Idle", "Walking", "Sword And Shield Slash", "Sword And Shield
+ * Death") resolve automatically.
  */
-export function RiggedPiece({ url, anim, scale = 0.5 }: Props) {
+export function RiggedPiece({ url, anim, targetHeight = 1.0 }: Props) {
   const group = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF(url, '/draco/', true);
   const cloned = useMemo(() => skeletonClone(scene), [scene]);
@@ -27,8 +29,24 @@ export function RiggedPiece({ url, anim, scale = 0.5 }: Props) {
     cloned.traverse((o) => {
       o.castShadow = true;
       o.receiveShadow = true;
+      // Skinned meshes default to a bind-pose bounding box that can be tiny or
+      // missing; force-recompute so our auto-fit measurement is real.
+      if ((o as THREE.Mesh).geometry) (o as THREE.Mesh).geometry.computeBoundingBox();
     });
-  }, [cloned]);
+    // Auto-fit: scale so the model's height equals targetHeight, then drop it so
+    // its feet sit on y=0 and it's centred on x/z. Clamp the fit factor in case
+    // the bbox is degenerate.
+    cloned.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(cloned);
+    const size = box.getSize(new THREE.Vector3());
+    const measured = size.y > 0.05 ? size.y : 1.7; // fall back to typical humanoid height
+    const fit = THREE.MathUtils.clamp(targetHeight / measured, 0.01, 2);
+    cloned.scale.setScalar(fit);
+    cloned.updateMatrixWorld(true);
+    box.setFromObject(cloned);
+    const center = box.getCenter(new THREE.Vector3());
+    cloned.position.set(-center.x, -box.min.y, -center.z);
+  }, [cloned, targetHeight]);
 
   useEffect(() => {
     const pick = (...kws: string[]) =>
@@ -56,7 +74,7 @@ export function RiggedPiece({ url, anim, scale = 0.5 }: Props) {
 
   return (
     <group ref={group}>
-      <primitive object={cloned} scale={scale} />
+      <primitive object={cloned} />
     </group>
   );
 }
