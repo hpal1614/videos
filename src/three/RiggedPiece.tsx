@@ -19,7 +19,7 @@ interface Props {
  */
 export function RiggedPiece({ url, anim, scale = 0.5 }: Props) {
   const group = useRef<THREE.Group>(null);
-  const { scene, animations } = useGLTF(url, true, true);
+  const { scene, animations } = useGLTF(url, '/draco/', true);
   const cloned = useMemo(() => skeletonClone(scene), [scene]);
   const { actions, names } = useAnimations(animations, group);
 
