@@ -8,12 +8,12 @@ import type { DyingActor, PieceSymbol } from '../game/types';
 const DEATH_MS = 1600;
 
 const RIGGED_HEIGHT: Record<PieceSymbol, number> = {
-  p: 0.72,
-  r: 0.78,
-  n: 0.85,
-  b: 0.85,
-  q: 0.95,
-  k: 1.05,
+  p: 1.8,
+  r: 2.0,
+  n: 2.1,
+  b: 2.1,
+  q: 2.4,
+  k: 2.6,
 };
 
 export function DyingPiece({ actor }: { actor: DyingActor }) {

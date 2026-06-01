@@ -16,13 +16,15 @@ const SOLO_SQUARE: Square | null = 'e2';
 // Heights for rigged characters, tile width = 1.0. Tuned a touch taller than the
 // procedural pieces so a humanoid silhouette reads as a full chess piece, but
 // kept under the tile width so adjacent pieces don't visually clip.
+// Wizard's-chess scale — life-sized warriors that tower over the tile, not
+// shrunk to chess-piece size. Tile width = 1 unit.
 const RIGGED_HEIGHT: Record<PieceSymbol, number> = {
-  p: 0.72,
-  r: 0.78,
-  n: 0.85,
-  b: 0.85,
-  q: 0.95,
-  k: 1.05,
+  p: 1.8,
+  r: 2.0,
+  n: 2.1,
+  b: 2.1,
+  q: 2.4,
+  k: 2.6,
 };
 
 interface Props {

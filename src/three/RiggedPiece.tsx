@@ -32,16 +32,30 @@ export function RiggedPiece({ url, anim, color, targetHeight = 1.0 }: Props) {
       o.receiveShadow = true;
       if ((o as THREE.Mesh).geometry) (o as THREE.Mesh).geometry.computeBoundingBox();
     });
+    // Recenter only — keep the source model's native scale so it isn't shrunk
+    // out of recognition. Feet sit on y=0 and the model is centred on x/z.
+    // Measure visible meshes only — bone hierarchies and helper objects can
+    // inflate the bbox with empty space, making targetHeight scale to a much
+    // smaller visible character than expected.
     cloned.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(cloned);
-    const size = box.getSize(new THREE.Vector3());
-    const measured = size.y > 0.05 ? size.y : 1.7;
-    const fit = THREE.MathUtils.clamp(targetHeight / measured, 0.01, 2);
-    cloned.scale.setScalar(fit);
+    const meshBox = new THREE.Box3();
+    cloned.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh || (m as unknown as THREE.SkinnedMesh).isSkinnedMesh) {
+        m.geometry.computeBoundingBox();
+        const b = m.geometry.boundingBox?.clone();
+        if (b) {
+          b.applyMatrix4(m.matrixWorld);
+          meshBox.union(b);
+        }
+      }
+    });
+    const measured = (meshBox.max.y - meshBox.min.y) || 1.7;
+    cloned.scale.setScalar(targetHeight / measured);
     cloned.updateMatrixWorld(true);
-    box.setFromObject(cloned);
-    const center = box.getCenter(new THREE.Vector3());
-    cloned.position.set(-center.x, -box.min.y, -center.z);
+    const finalBox = new THREE.Box3().setFromObject(cloned);
+    const center = finalBox.getCenter(new THREE.Vector3());
+    cloned.position.set(-center.x, -finalBox.min.y, -center.z);
   }, [cloned, targetHeight]);
 
   useEffect(() => {
