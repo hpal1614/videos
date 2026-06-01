@@ -100,7 +100,12 @@ export function Piece({ entity, selected }: Props) {
     <group ref={group} onPointerDown={handleDown}>
       {url ? (
         <Suspense fallback={null}>
-          <RiggedPiece url={url} anim={anim} targetHeight={RIGGED_HEIGHT[entity.type]} />
+          <RiggedPiece
+            url={url}
+            anim={anim}
+            color={entity.color}
+            targetHeight={RIGGED_HEIGHT[entity.type]}
+          />
         </Suspense>
       ) : (
         <mesh geometry={geometry} material={material} castShadow receiveShadow scale={0.92} />

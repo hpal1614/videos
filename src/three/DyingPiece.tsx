@@ -32,7 +32,12 @@ export function DyingPiece({ actor }: { actor: DyingActor }) {
   return (
     <group position={[x, 0, z]} rotation={[0, rotY, 0]}>
       <Suspense fallback={null}>
-        <RiggedPiece url={url} anim="death" targetHeight={RIGGED_HEIGHT[actor.type]} />
+        <RiggedPiece
+          url={url}
+          anim="death"
+          color={actor.color}
+          targetHeight={RIGGED_HEIGHT[actor.type]}
+        />
       </Suspense>
     </group>
   );
