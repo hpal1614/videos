@@ -6,7 +6,12 @@ import { modelUrlFor } from './assets';
 import { RiggedPiece } from './RiggedPiece';
 import { squareToWorld } from '../game/board';
 import { useGame } from '../state/store';
-import type { AnimState, PieceEntity, PieceSymbol } from '../game/types';
+import type { AnimState, PieceEntity, PieceSymbol, Square } from '../game/types';
+
+// DEBUG: while we're iterating on the rigged-character pipeline, only render
+// the rigged model on this one square. Set to null to apply MODEL_URLS to every
+// matching piece on the board.
+const SOLO_SQUARE: Square | null = 'e2';
 
 // Heights for rigged characters, tile width = 1.0. Tuned a touch taller than the
 // procedural pieces so a humanoid silhouette reads as a full chess piece, but
@@ -44,7 +49,8 @@ export function Piece({ entity, selected }: Props) {
   useEffect(() => () => material.dispose(), [material]);
 
   const phase = useMemo(() => Math.random() * Math.PI * 2, []);
-  const url = modelUrlFor(entity.color, entity.type);
+  const rawUrl = modelUrlFor(entity.color, entity.type);
+  const url = SOLO_SQUARE && entity.square !== SOLO_SQUARE ? undefined : rawUrl;
   const baseRotY = url
     ? entity.color === 'w'
       ? Math.PI // rigged: white faces the enemy (-z); flip if your model faces the other way
