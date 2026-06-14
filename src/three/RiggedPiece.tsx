@@ -3,6 +3,7 @@ import { useGLTF, useAnimations } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import * as THREE from 'three';
 import type { AnimState, Color } from '../game/types';
+import { useRetargetedAnimations } from './useRetargetedAnimations';
 
 interface Props {
   url: string;
@@ -24,7 +25,12 @@ export function RiggedPiece({ url, anim, color, targetHeight = 1.0 }: Props) {
   const group = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF(url, '/draco/', true);
   const cloned = useMemo(() => skeletonClone(scene), [scene]);
-  const { actions, names } = useAnimations(animations, group);
+  // If the GLB ships its own clips, use them. Otherwise (e.g. the Paladin
+  // T-pose), borrow + retarget the Quaternius Universal Animation Library
+  // clips onto this scene's skeleton.
+  const retargeted = useRetargetedAnimations(scene);
+  const effectiveClips = animations.length > 0 ? animations : retargeted;
+  const { actions, names } = useAnimations(effectiveClips, group);
 
   useEffect(() => {
     cloned.traverse((o) => {
