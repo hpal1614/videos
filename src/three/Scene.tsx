@@ -1,5 +1,6 @@
+import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { Environment, OrbitControls } from '@react-three/drei';
 import { Board } from './Board';
 import { Pieces } from './Pieces';
 import { AmbientParticles } from './Particles';
@@ -40,6 +41,13 @@ export function Scene() {
     >
       <color attach="background" args={[0x0a0810]} />
       <fog attach="fog" args={[0x0a0810, 16, 34]} />
+
+      {/* Image-based lighting from a real HDR — gives armour, stone, and magic
+          effects proper reflections. background={false} keeps our dark dungeon
+          backdrop; the HDR only drives lighting. */}
+      <Suspense fallback={null}>
+        <Environment files="/hdri/venice_sunset_1k.hdr" background={false} />
+      </Suspense>
 
       <hemisphereLight args={[0x556088, 0x100806, 0.55]} />
       <ambientLight intensity={0.18} />

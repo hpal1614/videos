@@ -8,10 +8,9 @@ import { squareToWorld } from '../game/board';
 import { useGame } from '../state/store';
 import type { AnimState, PieceEntity, PieceSymbol, Square } from '../game/types';
 
-// DEBUG: while we're iterating on the rigged-character pipeline, only render
-// the rigged model on this one square. Set to null to apply MODEL_URLS to every
-// matching piece on the board.
-const SOLO_SQUARE: Square | null = 'e2';
+// All pieces matching MODEL_URLS will use rigged models. Set this back to a
+// specific square (e.g. 'e2') to isolate one for debugging if needed.
+const SOLO_SQUARE: Square | null = null;
 
 // Heights for rigged characters, tile width = 1.0. Tuned a touch taller than the
 // procedural pieces so a humanoid silhouette reads as a full chess piece, but
