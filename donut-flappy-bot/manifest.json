@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Donut Flappy Autoplayer",
+  "version": "1.0.0",
+  "description": "One click: auto-presses Start and then plays donut/flappy-style canvas tap games for you, aiming the donut through the gaps to beat the high score.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Donut Flappy Bot"
+  },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "toggle-bot": {
+      "suggested_key": { "default": "Ctrl+Shift+B" },
+      "description": "Start/stop the autoplayer"
+    }
+  }
+}

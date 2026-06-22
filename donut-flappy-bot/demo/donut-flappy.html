@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Donut Flappy (demo target)</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1020;display:grid;place-items:center;
+    font-family:system-ui,sans-serif;color:#fff;overflow:hidden}
+  #wrap{text-align:center}
+  canvas{background:#7ec8ff;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.5);touch-action:none}
+  p{opacity:.7;font-size:13px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="420" height="600"></canvas>
+  <p>Tap / click / Space to flap. This is a test target for the autoplayer extension.</p>
+</div>
+<script>
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+const W = cv.width, H = cv.height;
+const GAP = 150, PIPE_W = 64, SPEED = 2.4, GRAV = 0.45, FLAP = -7.6;
+let donut, pipes, score, best = 0, state = "ready"; // ready | play | dead
+
+function reset(){
+  donut = { x: W*0.30, y: H/2, vy: 0, r: 18 };
+  pipes = []; score = 0; state = "play";
+  spawn(W + 60); spawn(W + 60 + 220); spawn(W + 60 + 440);
+}
+function spawn(x){
+  const margin = 60;
+  const gapY = margin + Math.random()*(H - GAP - margin*2);
+  pipes.push({ x, gapY, passed: false });
+}
+function flap(){
+  if (state === "ready") reset();
+  else if (state === "play") donut.vy = FLAP;
+  else if (state === "dead") reset();
+}
+addEventListener("keydown", e => { if (e.code==="Space"||e.code==="ArrowUp"){ e.preventDefault(); flap(); }});
+cv.addEventListener("mousedown", flap);
+cv.addEventListener("pointerdown", flap);
+cv.addEventListener("touchstart", e => { e.preventDefault(); flap(); }, {passive:false});
+
+function update(){
+  if (state !== "play") return;
+  donut.vy += GRAV; donut.y += donut.vy;
+  for (const p of pipes) p.x -= SPEED;
+  if (pipes.length && pipes[0].x < -PIPE_W){ pipes.shift(); spawn(pipes[pipes.length-1].x + 220); }
+  for (const p of pipes){
+    if (!p.passed && p.x + PIPE_W < donut.x){ p.passed = true; score++; best = Math.max(best, score); }
+    const inX = donut.x + donut.r > p.x && donut.x - donut.r < p.x + PIPE_W;
+    const hit = inX && (donut.y - donut.r < p.gapY || donut.y + donut.r > p.gapY + GAP);
+    if (hit) state = "dead";
+  }
+  if (donut.y + donut.r > H || donut.y - donut.r < 0) state = "dead";
+}
+
+function drawDonut(x,y,r){
+  ctx.fillStyle = "#e8a23c"; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();
+  ctx.fillStyle = "#f7d9a0"; ctx.beginPath(); ctx.arc(x,y-r*0.15,r*0.85,0,7); ctx.fill();
+  ctx.fillStyle = "#ff7ad9"; ctx.beginPath(); ctx.arc(x,y-r*0.15,r*0.85,0,Math.PI,true); ctx.fill();
+  ctx.fillStyle = "#7ec8ff"; ctx.beginPath(); ctx.arc(x,y,r*0.35,0,7); ctx.fill(); // hole shows sky
+  // sprinkles
+  ctx.fillStyle="#fff"; ctx.fillRect(x-6,y-r*0.7,3,6); ctx.fillStyle="#5cf";
+  ctx.fillRect(x+5,y-r*0.6,3,6); ctx.fillStyle="#fd5"; ctx.fillRect(x-1,y-r*0.85,3,6);
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  // pipes (obstacle colour distinct from sky)
+  ctx.fillStyle = "#2bb24c";
+  for (const p of pipes){
+    ctx.fillRect(p.x, 0, PIPE_W, p.gapY);
+    ctx.fillRect(p.x, p.gapY + GAP, PIPE_W, H - (p.gapY + GAP));
+  }
+  // ground
+  ctx.fillStyle = "#caa472"; ctx.fillRect(0, H-12, W, 12);
+  drawDonut(donut.x, donut.y, donut.r);
+  // score
+  ctx.fillStyle = "#fff"; ctx.font = "bold 36px system-ui"; ctx.textAlign = "center";
+  ctx.fillText(score, W/2, 56);
+  ctx.font = "14px system-ui"; ctx.fillText("best "+best, W/2, 80);
+  if (state === "ready"){ banner("DONUT FLAPPY", "tap to start"); }
+  if (state === "dead"){ banner("💥 splat!", "tap to retry"); }
+}
+function banner(t,s){
+  ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect(0, H/2-60, W, 120);
+  ctx.fillStyle = "#fff"; ctx.font = "bold 30px system-ui"; ctx.fillText(t, W/2, H/2-6);
+  ctx.font = "16px system-ui"; ctx.fillText(s, W/2, H/2+26);
+}
+function loop(){ update(); render(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
