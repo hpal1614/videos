@@ -32,6 +32,22 @@ Each animation frame the bot:
 3. A control panel appears top-right of the page. It auto-clicks Start and
    begins playing. Click **STOP BOT** (or Ctrl+Shift+B) to stop.
 
+## flappybird.io (built-in preset)
+
+There's a tuned preset for **flappybird.io** that switches on automatically by
+hostname. Instead of "anything that isn't sky = obstacle", it uses **colour
+keying**:
+
+- **bird** is tracked by its yellow,
+- **only green** counts as a pipe — so clouds, the city/bush band, and the
+  ground are ignored.
+
+Just open flappybird.io, press **Ctrl+Shift+B**, and it should start flapping
+through the pipes. If the bird/pipe detection drifts (different rendering, retina
+scaling), open **tuning** and nudge **bird sens.** / **pipe sens.**. Your tuning
+is saved per-site, so it won't affect other games. **reset defaults** restores
+the flappybird.io preset (not the generic one) while you're on that site.
+
 ## Tuning (if a game misbehaves)
 
 Open **tuning** in the on-page panel and adjust live:
@@ -43,7 +59,9 @@ Open **tuning** in the on-page panel and adjust live:
 | **aim up/down** | bias the target within the gap (raise if it clips the bottom pipe). |
 | **fall predict** | how far ahead it predicts the donut's drop (raise if it taps too late). |
 | **tap cooldown** | min ms between taps (raise if it slams the ceiling). |
-| **colour sens.** | obstacle vs. sky colour threshold. Tune if it can't see pipes. |
+| **sky sens.** | sky-vs-obstacle threshold (generic "auto" mode only). |
+| **pipe sens.** | how loosely it matches the pipe colour (colour mode, e.g. flappybird.io). |
+| **bird sens.** | how loosely it matches the bird/player colour (colour mode). |
 
 Settings persist automatically. **reset defaults** restores them.
 

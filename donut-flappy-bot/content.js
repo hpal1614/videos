@@ -32,8 +32,33 @@
     cooldownMs: 90,      // min time between taps (anti-ceiling)
     bgTol: 60,           // colour distance: below = "free/sky", above = obstacle
     autoStart: true,     // click a Start/Play button when activated
+    // --- colour-keyed vision (per-site presets) ---
+    obstacleMode: "auto",      // "auto" = anything-not-sky, "color" = match obstacleColor
+    obstacleColor: [80, 170, 60],
+    obstacleColorTol: 90,
+    playerMode: "motion",      // "motion" = frame-diff, "color" = match playerColor
+    playerColor: [228, 200, 70],
+    playerColorTol: 90,
   };
-  let cfg = { ...DEFAULTS };
+
+  // Per-site presets, merged over DEFAULTS when the hostname matches.
+  const PRESETS = {
+    "flappybird.io": {
+      playerMode: "color", playerColor: [228, 200, 70], playerColorTol: 95,
+      obstacleMode: "color", obstacleColor: [86, 170, 60], obstacleColorTol: 95,
+      playerXFrac: 0.30, lookMin: 0.02, lookMax: 0.45,
+      velGain: 7, cooldownMs: 95, deadzone: 0.035, targetBias: -0.01,
+    },
+  };
+
+  function presetForHost() {
+    let p = {};
+    for (const k in PRESETS) if (location.hostname.includes(k)) p = PRESETS[k];
+    return { ...DEFAULTS, ...p };
+  }
+  function hostKey() { return "donutCfg:" + location.hostname; }
+
+  let cfg = presetForHost();
 
   // ---- state ----------------------------------------------------------------
   let running = false;
@@ -114,7 +139,17 @@
     }
     br /= n; bg /= n; bb /= n;
     const tol2 = cfg.bgTol * cfg.bgTol;
-    const isFree = (i) => dist2(data[i], data[i + 1], data[i + 2], br, bg, bb) < tol2;
+    const oc = cfg.obstacleColor, ocTol2 = cfg.obstacleColorTol * cfg.obstacleColorTol;
+    const pc = cfg.playerColor, pcTol2 = cfg.playerColorTol * cfg.playerColorTol;
+
+    // "obstacle" = a pipe pixel. In color mode key on the pipe colour (e.g. green),
+    // which ignores clouds/buildings/ground; in auto mode it's "anything not sky".
+    const isObstacle = (i) =>
+      cfg.obstacleMode === "color"
+        ? dist2(data[i], data[i + 1], data[i + 2], oc[0], oc[1], oc[2]) < ocTol2
+        : dist2(data[i], data[i + 1], data[i + 2], br, bg, bb) >= tol2;
+    // "free" for gap-finding = simply "not an obstacle pixel".
+    const isFree = (i) => !isObstacle(i);
 
     // --- grayscale + frame diff to locate the moving donut ---
     const gray = new Float32Array(w * h);
@@ -124,7 +159,21 @@
 
     let px = Math.round(cfg.playerXFrac * w);
     let py = Math.round(h / 2);
-    if (cfg.playerXAuto && prevGray) {
+    if (cfg.playerMode === "color") {
+      // find the centroid of player-coloured pixels (e.g. the yellow bird) in the left band
+      const xMax = Math.floor(w * 0.55);
+      let cx = 0, cy = 0, cs = 0;
+      for (let x = 2; x < xMax; x++) {
+        for (let y = 2; y < h - 2; y++) {
+          const i = idx(x, y);
+          if (dist2(data[i], data[i + 1], data[i + 2], pc[0], pc[1], pc[2]) < pcTol2) {
+            cx += x; cy += y; cs++;
+          }
+        }
+      }
+      if (cs > 6) { px = Math.round(cx / cs); py = Math.round(cy / cs); }
+      else if (player.found) { px = Math.round(player.x); py = Math.round(player.y); }
+    } else if (cfg.playerXAuto && prevGray) {
       // search the left 55% for the column-band with the most motion
       let bestSum = 0, bestX = px, bestY = py;
       const xMax = Math.floor(w * 0.55);
@@ -334,7 +383,7 @@
 
     statusEl = panel.querySelector("#dab-status");
     panel.querySelector("#dab-toggle").onclick = toggle;
-    panel.querySelector("#dab-reset").onclick = () => { cfg = { ...DEFAULTS }; save(); buildSliders(); };
+    panel.querySelector("#dab-reset").onclick = () => { cfg = presetForHost(); save(); buildSliders(); };
     makeDraggable(panel, panel.querySelector("#dab-grip"));
     buildSliders();
   }
@@ -345,7 +394,9 @@
     ["targetBias", -0.15, 0.15, 0.005, "aim up/down"],
     ["velGain", 0, 14, 1, "fall predict"],
     ["cooldownMs", 40, 250, 5, "tap cooldown"],
-    ["bgTol", 20, 140, 5, "colour sens."],
+    ["bgTol", 20, 140, 5, "sky sens."],
+    ["obstacleColorTol", 30, 160, 5, "pipe sens."],
+    ["playerColorTol", 30, 160, 5, "bird sens."],
   ];
   function buildSliders() {
     const box = panel.querySelector("#dab-sliders");
@@ -417,12 +468,13 @@
     setStatus("stopped");
   }
 
-  // persistence
-  function save() { try { chrome.storage?.local.set({ donutCfg: cfg }); } catch (e) {} }
+  // persistence (per-host, so tuning one game doesn't disturb another)
+  function save() { try { chrome.storage?.local.set({ [hostKey()]: cfg }); } catch (e) {} }
   function load() {
     try {
-      chrome.storage?.local.get("donutCfg", (r) => {
-        if (r && r.donutCfg) cfg = { ...DEFAULTS, ...r.donutCfg };
+      chrome.storage?.local.get(hostKey(), (r) => {
+        const saved = r && r[hostKey()];
+        cfg = saved ? { ...presetForHost(), ...saved } : presetForHost();
         if (panel) buildSliders();
       });
     } catch (e) {}
