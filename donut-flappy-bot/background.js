@@ -7,7 +7,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     await chrome.tabs.sendMessage(tab.id, { type: "toggle" });
   } catch (e) {
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["bot-core.js", "content.js"] });
       await chrome.tabs.sendMessage(tab.id, { type: "toggle" });
     } catch (_) { /* unsupported page */ }
   }

@@ -61,7 +61,7 @@ function drawDonut(x,y,r){
   ctx.fillStyle = "#e8a23c"; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();
   ctx.fillStyle = "#f7d9a0"; ctx.beginPath(); ctx.arc(x,y-r*0.15,r*0.85,0,7); ctx.fill();
   ctx.fillStyle = "#ff7ad9"; ctx.beginPath(); ctx.arc(x,y-r*0.15,r*0.85,0,Math.PI,true); ctx.fill();
-  ctx.fillStyle = "#7ec8ff"; ctx.beginPath(); ctx.arc(x,y,r*0.35,0,7); ctx.fill(); // hole shows sky
+  ctx.fillStyle = "#8a5a2b"; ctx.beginPath(); ctx.arc(x,y,r*0.35,0,7); ctx.fill(); // hole (kept non-sky so the bot sees one solid blob)
   // sprinkles
   ctx.fillStyle="#fff"; ctx.fillRect(x-6,y-r*0.7,3,6); ctx.fillStyle="#5cf";
   ctx.fillRect(x+5,y-r*0.6,3,6); ctx.fillStyle="#fd5"; ctx.fillRect(x-1,y-r*0.85,3,6);

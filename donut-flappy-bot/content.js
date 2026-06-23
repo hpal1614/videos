@@ -1,60 +1,32 @@
-/* Donut Flappy Autoplayer — content script
+/* Donut Flappy Autoplayer — content script (DOM glue around bot-core.js)
  *
- * Strategy (works on most "tap to flap" canvas games):
- *  1. Find the largest <canvas> on the page (that's the game).
- *  2. Each animation frame, copy the canvas pixels into an offscreen buffer.
- *  3. VISION:
- *       - sample the sky/background colour from the top corners
- *       - find the donut (player) by frame-differencing: the blob that moved
- *         the most in the left part of the screen is the player.
- *       - look a bit to the RIGHT of the player for the next obstacle column,
- *         and find the vertical GAP in it (the free run bounded by obstacle).
- *  4. CONTROL: if the donut is (or will soon be) below the gap centre, TAP.
- *  5. TAP: fire pointer/mouse/touch/keyboard events so it works regardless of
- *     which input the game listens for.
- *
- * Nothing here is game-specific, so a floating panel lets you tune it live.
+ * bot-core.js holds the vision + control brain (and is unit/gameplay-tested in
+ * Node against rendered pixels). This file just wires it to a real page:
+ *   1. find the game <canvas>
+ *   2. each frame, copy its pixels into a small offscreen buffer
+ *   3. hand the pixels to the bot, and if it says "flap", fire taps
+ *   4. auto-press Start, and auto-restart after a crash
+ *   5. a draggable panel with live tuning sliders
  */
 (() => {
   "use strict";
   if (window.__donutBotLoaded) return;        // avoid double-injection
   window.__donutBotLoaded = true;
 
-  // ---- tunables (persisted) -------------------------------------------------
-  const DEFAULTS = {
-    playerXAuto: true,   // detect donut x by motion, else use playerXFrac
-    playerXFrac: 0.30,   // fallback horizontal position of the donut (0..1)
-    lookMin: 0.02,       // start scanning this far right of the donut (frac of w)
-    lookMax: 0.45,       // ...up to this far right
-    deadzone: 0.04,      // tolerance band around gap centre (frac of h)
-    targetBias: 0.00,    // shift aim up(-)/down(+) within the gap (frac of h)
-    velGain: 6,          // how far ahead to predict the donut's fall (frames)
-    cooldownMs: 90,      // min time between taps (anti-ceiling)
-    bgTol: 60,           // colour distance: below = "free/sky", above = obstacle
-    autoStart: true,     // click a Start/Play button when activated
-    // --- colour-keyed vision (per-site presets) ---
-    obstacleMode: "auto",      // "auto" = anything-not-sky, "color" = match obstacleColor
-    obstacleColor: [80, 170, 60],
-    obstacleColorTol: 90,
-    playerMode: "motion",      // "motion" = frame-diff, "color" = match playerColor
-    playerColor: [228, 200, 70],
-    playerColorTol: 90,
-  };
+  const Core = globalThis.DonutBotCore;
+  if (!Core) { console.error("[DonutBot] bot-core.js not loaded"); return; }
 
-  // Per-site presets, merged over DEFAULTS when the hostname matches.
+  // Per-site presets, merged over the core defaults when the hostname matches.
   const PRESETS = {
     "flappybird.io": {
       playerMode: "color", playerColor: [228, 200, 70], playerColorTol: 95,
-      obstacleMode: "color", obstacleColor: [86, 170, 60], obstacleColorTol: 95,
-      playerXFrac: 0.30, lookMin: 0.02, lookMax: 0.45,
-      velGain: 7, cooldownMs: 95, deadzone: 0.035, targetBias: -0.01,
+      obstacleMode: "auto", bgTol: 70,
     },
   };
-
   function presetForHost() {
     let p = {};
     for (const k in PRESETS) if (location.hostname.includes(k)) p = PRESETS[k];
-    return { ...DEFAULTS, ...p };
+    return { ...Core.defaults(), ...p };
   }
   function hostKey() { return "donutCfg:" + location.hostname; }
 
@@ -64,15 +36,13 @@
   let running = false;
   let canvas = null;
   let off = null, octx = null;       // offscreen analysis buffer
-  let prevGray = null;               // previous frame (grayscale) for diffing
-  let lastTap = 0;
-  let player = { x: 0, y: 0, vy: 0, found: false };
-  let panel, statusEl, scoreGuessEl;
-  let rafId = 0;
-  let startTries = 0;
+  let bot = null;                    // Core bot instance
+  let rafId = 0, startTries = 0;
+  let stillFrames = 0, lastY = -1, frames = 0;
+  let panel, statusEl;
 
   // =========================================================================
-  // Canvas discovery
+  // Canvas discovery + pixel grab
   // =========================================================================
   function findCanvas() {
     const cs = [...document.querySelectorAll("canvas")].filter((c) => {
@@ -80,7 +50,6 @@
       return r.width > 80 && r.height > 80;
     });
     if (!cs.length) return null;
-    // biggest visible canvas wins
     cs.sort((a, b) => {
       const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
       return rb.width * rb.height - ra.width * ra.height;
@@ -91,15 +60,13 @@
   function ensureBuffers() {
     const w = canvas.width || canvas.getBoundingClientRect().width;
     const h = canvas.height || canvas.getBoundingClientRect().height;
-    // downscale for speed; keep aspect
-    const scale = Math.min(1, 320 / w);
+    const scale = Math.min(1, 320 / w);   // downscale for speed, keep aspect
     const bw = Math.max(40, Math.round(w * scale));
     const bh = Math.max(40, Math.round(h * scale));
     if (!off || off.width !== bw || off.height !== bh) {
       off = document.createElement("canvas");
       off.width = bw; off.height = bh;
       octx = off.getContext("2d", { willReadFrequently: true });
-      prevGray = null;
     }
     return { bw, bh };
   }
@@ -110,129 +77,12 @@
       octx.drawImage(canvas, 0, 0, bw, bh);
       return octx.getImageData(0, 0, bw, bh);
     } catch (e) {
-      // tainted (cross-origin) or WebGL without preserveDrawingBuffer
-      return null;
+      return null;   // tainted (cross-origin) or WebGL without preserveDrawingBuffer
     }
   }
 
   // =========================================================================
-  // Vision
-  // =========================================================================
-  function dist2(r, g, b, R, G, B) {
-    const dr = r - R, dg = g - G, db = b - B;
-    return dr * dr + dg * dg + db * db;
-  }
-
-  function analyze(img) {
-    const { data, width: w, height: h } = img;
-    const idx = (x, y) => (y * w + x) * 4;
-
-    // --- background colour: average a few top-corner samples (the sky) ---
-    let br = 0, bg = 0, bb = 0, n = 0;
-    const corners = [
-      [2, 2], [w - 3, 2], [Math.floor(w / 2), 2],
-      [2, Math.floor(h * 0.12)], [w - 3, Math.floor(h * 0.12)],
-    ];
-    for (const [x, y] of corners) {
-      const i = idx(x, y);
-      br += data[i]; bg += data[i + 1]; bb += data[i + 2]; n++;
-    }
-    br /= n; bg /= n; bb /= n;
-    const tol2 = cfg.bgTol * cfg.bgTol;
-    const oc = cfg.obstacleColor, ocTol2 = cfg.obstacleColorTol * cfg.obstacleColorTol;
-    const pc = cfg.playerColor, pcTol2 = cfg.playerColorTol * cfg.playerColorTol;
-
-    // "obstacle" = a pipe pixel. In color mode key on the pipe colour (e.g. green),
-    // which ignores clouds/buildings/ground; in auto mode it's "anything not sky".
-    const isObstacle = (i) =>
-      cfg.obstacleMode === "color"
-        ? dist2(data[i], data[i + 1], data[i + 2], oc[0], oc[1], oc[2]) < ocTol2
-        : dist2(data[i], data[i + 1], data[i + 2], br, bg, bb) >= tol2;
-    // "free" for gap-finding = simply "not an obstacle pixel".
-    const isFree = (i) => !isObstacle(i);
-
-    // --- grayscale + frame diff to locate the moving donut ---
-    const gray = new Float32Array(w * h);
-    for (let p = 0, i = 0; p < gray.length; p++, i += 4) {
-      gray[p] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
-    }
-
-    let px = Math.round(cfg.playerXFrac * w);
-    let py = Math.round(h / 2);
-    if (cfg.playerMode === "color") {
-      // find the centroid of player-coloured pixels (e.g. the yellow bird) in the left band
-      const xMax = Math.floor(w * 0.55);
-      let cx = 0, cy = 0, cs = 0;
-      for (let x = 2; x < xMax; x++) {
-        for (let y = 2; y < h - 2; y++) {
-          const i = idx(x, y);
-          if (dist2(data[i], data[i + 1], data[i + 2], pc[0], pc[1], pc[2]) < pcTol2) {
-            cx += x; cy += y; cs++;
-          }
-        }
-      }
-      if (cs > 6) { px = Math.round(cx / cs); py = Math.round(cy / cs); }
-      else if (player.found) { px = Math.round(player.x); py = Math.round(player.y); }
-    } else if (cfg.playerXAuto && prevGray) {
-      // search the left 55% for the column-band with the most motion
-      let bestSum = 0, bestX = px, bestY = py;
-      const xMax = Math.floor(w * 0.55);
-      // per-column motion energy, then pick weighted centroid in best band
-      let cx = 0, cy = 0, csum = 0;
-      for (let x = 2; x < xMax; x++) {
-        for (let y = 2; y < h - 2; y++) {
-          const p = y * w + x;
-          const d = Math.abs(gray[p] - prevGray[p]);
-          if (d > 28) { cx += x * d; cy += y * d; csum += d; }
-        }
-      }
-      if (csum > 400) { bestX = cx / csum; bestY = cy / csum; bestSum = csum; }
-      if (bestSum > 0) { px = Math.round(bestX); py = Math.round(bestY); }
-      else if (player.found) { px = Math.round(player.x); py = Math.round(player.y); }
-    } else {
-      // no diff yet: find donut's y by scanning its column for a non-sky blob
-      let sy = 0, sc = 0;
-      for (let y = 2; y < h - 2; y++) {
-        if (!isFree(idx(px, y))) { sy += y; sc++; }
-      }
-      if (sc > 0) py = Math.round(sy / sc);
-    }
-    prevGray = gray;
-
-    // --- find the next obstacle column to the right of the donut, and its gap ---
-    const x1 = Math.min(w - 2, px + Math.round(cfg.lookMin * w));
-    const x2 = Math.min(w - 2, px + Math.round(cfg.lookMax * w));
-    let target = py, haveGap = false, obstacleX = -1;
-    for (let x = x1; x <= x2; x += 2) {
-      let obstacleCount = 0;
-      for (let y = 0; y < h; y++) if (!isFree(idx(x, y))) obstacleCount++;
-      if (obstacleCount > h * 0.18) {   // this column has a pipe/obstacle
-        obstacleX = x;
-        // find the gap: longest FREE vertical run that has an obstacle above it
-        let runStart = -1, bestLen = 0, bestC = py, sawObstacleAbove = false;
-        for (let y = 0; y <= h; y++) {
-          const free = y < h && isFree(idx(x, y));
-          if (free && runStart < 0) runStart = y;
-          if ((!free || y === h) && runStart >= 0) {
-            const len = y - runStart;
-            // a real gap is bounded above by obstacle (skip the top sky run)
-            if (sawObstacleAbove && len > bestLen) {
-              bestLen = len; bestC = runStart + len / 2;
-            }
-            runStart = -1;
-          }
-          if (!free) sawObstacleAbove = true;
-        }
-        if (bestLen > 0) { target = bestC; haveGap = true; }
-        break;
-      }
-    }
-
-    return { px, py, target, haveGap, obstacleX, w, h };
-  }
-
-  // =========================================================================
-  // Control
+  // Main loop
   // =========================================================================
   function step() {
     if (!running) return;
@@ -245,111 +95,80 @@
 
     const img = grabPixels();
     if (!img) {
-      setStatus("⚠ can't read canvas (cross-origin or WebGL). Taps still firing.");
-      // blind fallback: gentle metronome tap so the donut doesn't drop
-      maybeTap(performance.now() % 700 < 30);
+      setStatus("⚠ can't read canvas (cross-origin/WebGL). Blind tapping.");
+      maybeTap(performance.now() % 700 < 30);   // gentle metronome fallback
       return;
     }
 
-    const a = analyze(img);
-    // scale player coords back to display space ratio is irrelevant; we tap centre
-    const newY = a.py;
-    player.vy = player.found ? newY - player.y : 0;
-    player.x = a.px; player.y = newY; player.found = true;
+    const { tap: want, vision: v } = bot.tick(img, performance.now());
+    if (want) doTap();
+    frames++;
 
-    let targetY = a.target + cfg.targetBias * a.h;
-    const dead = cfg.deadzone * a.h;
-    const predicted = a.py + player.vy * cfg.velGain;
-
-    let wantTap = false;
-    if (a.haveGap) {
-      wantTap = predicted > targetY + dead;
-    } else {
-      // no obstacle in view: just hover around mid-low, don't smash ceiling
-      wantTap = predicted > a.h * 0.62;
+    // auto-restart: if the bird stops moving (or vanishes) for ~1.3s, the game is
+    // over — press Start again to keep racking up score.
+    if (cfg.autoRestart) {
+      if (v.found && Math.abs(v.py - lastY) > 1) { lastY = v.py; stillFrames = 0; }
+      else stillFrames++;
+      if (stillFrames > 80) { clickStart(); bot.reset(); stillFrames = 0; lastY = -1; }
     }
-    maybeTap(wantTap);
 
     setStatus(
-      `${a.haveGap ? "gap@" + Math.round(a.target) : "open"} | ` +
-      `donut y=${Math.round(a.py)} vy=${player.vy.toFixed(1)} ` +
-      `${wantTap ? "▲TAP" : "—"}`
+      `${v.haveGap ? "gap@" + Math.round(v.gapCenter) : "open"} | ` +
+      `bird y=${v.py} vy=${v.vy.toFixed(1)}${v.found ? "" : " (lost)"} ${want ? "▲" : "·"}`
     );
   }
 
-  function maybeTap(want) {
-    if (!want) return;
-    const now = performance.now();
-    if (now - lastTap < cfg.cooldownMs) return;
-    lastTap = now;
-    tap();
-  }
+  function maybeTap(want) { if (want) doTap(); }
 
   // =========================================================================
-  // Input synthesis — cover every common scheme
+  // Input synthesis — cover pointer / mouse / touch / keyboard
   // =========================================================================
-  function tap() {
+  function doTap() {
+    if (!canvas) return;
     const r = canvas.getBoundingClientRect();
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     const targets = [canvas, document, window];
 
-    // Pointer + Mouse
     for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
       const Ctor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
-      const ev = new Ctor(type, {
+      canvas.dispatchEvent(new Ctor(type, {
         bubbles: true, cancelable: true, composed: true,
         clientX: cx, clientY: cy, view: window, button: 0,
         pointerId: 1, pointerType: "touch", isPrimary: true,
-      });
-      canvas.dispatchEvent(ev);
+      }));
     }
-
-    // Touch
     try {
       const t = new Touch({ identifier: 1, target: canvas, clientX: cx, clientY: cy });
       for (const type of ["touchstart", "touchend"]) {
-        const ev = new TouchEvent(type, {
+        canvas.dispatchEvent(new TouchEvent(type, {
           bubbles: true, cancelable: true, composed: true,
           touches: type === "touchstart" ? [t] : [],
           targetTouches: type === "touchstart" ? [t] : [],
           changedTouches: [t],
-        });
-        canvas.dispatchEvent(ev);
+        }));
       }
-    } catch (e) { /* TouchEvent ctor unsupported on desktop—fine */ }
-
-    // Keyboard (Space / ArrowUp / W) — many flappy clones use these
+    } catch (e) { /* desktop has no TouchEvent ctor — fine */ }
     for (const [key, code, keyCode] of [[" ", "Space", 32], ["ArrowUp", "ArrowUp", 38]]) {
       for (const type of ["keydown", "keyup"]) {
-        const ev = new KeyboardEvent(type, {
-          bubbles: true, cancelable: true, composed: true, key, code, keyCode, which: keyCode,
-        });
+        const ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, composed: true, key, code, keyCode, which: keyCode });
         for (const tgt of targets) tgt.dispatchEvent(ev);
       }
     }
   }
 
   // =========================================================================
-  // Start-button auto-press
+  // Start / restart-button auto-press
   // =========================================================================
   function clickStart() {
-    const rx = /\b(start|play|tap to (start|play)|begin|go|new game|restart|continue)\b/i;
-    const candidates = [...document.querySelectorAll(
-      "button, [role=button], a, input[type=button], input[type=submit], div, span"
-    )];
-    for (const el of candidates) {
+    const rx = /\b(start|play|tap to (start|play)|begin|go|new game|restart|retry|continue|ok)\b/i;
+    const els = [...document.querySelectorAll("button, [role=button], a, input[type=button], input[type=submit], div, span")];
+    for (const el of els) {
       const r = el.getBoundingClientRect();
       if (r.width < 8 || r.height < 8) continue;
       const txt = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim();
-      if (txt && txt.length < 30 && rx.test(txt)) {
-        el.click();
-        // also dispatch a pointer tap in case it's canvas-drawn-looking
-        return true;
-      }
+      if (txt && txt.length < 30 && rx.test(txt)) { el.click(); return true; }
     }
-    // fallback: tap the canvas centre (many games start on first tap)
-    if (canvas) { tap(); return true; }
+    if (canvas) { doTap(); return true; }   // many games start on first tap
     return false;
   }
 
@@ -360,14 +179,13 @@
     if (panel) return;
     panel = document.createElement("div");
     panel.style.cssText = `
-      position:fixed; z-index:2147483647; top:12px; right:12px; width:230px;
+      position:fixed; z-index:2147483647; top:12px; right:12px; width:236px;
       font:12px/1.4 system-ui,sans-serif; color:#fff; background:rgba(20,20,28,.92);
       border:1px solid #ff7ad9; border-radius:10px; padding:10px;
       box-shadow:0 6px 24px rgba(0,0,0,.5); user-select:none;`;
     panel.innerHTML = `
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        <span style="font-size:16px">🍩</span>
-        <b style="flex:1">Donut Autoplayer</b>
+        <span style="font-size:16px">🍩</span><b style="flex:1">Donut Autoplayer</b>
         <span id="dab-grip" style="cursor:move;opacity:.6">⠿</span>
       </div>
       <button id="dab-toggle" style="width:100%;padding:7px;border:0;border-radius:7px;
@@ -376,26 +194,24 @@
       <details><summary style="cursor:pointer;color:#ffb">tuning</summary>
         <div id="dab-sliders" style="margin-top:6px"></div>
         <button id="dab-reset" style="width:100%;margin-top:6px;padding:4px;border:0;
-          border-radius:6px;background:#444;color:#fff;cursor:pointer">reset defaults</button>
+          border-radius:6px;background:#444;color:#fff;cursor:pointer">reset to preset</button>
       </details>
       <div style="margin-top:6px;font-size:10px;opacity:.6">Ctrl+Shift+B toggles</div>`;
     document.documentElement.appendChild(panel);
-
     statusEl = panel.querySelector("#dab-status");
     panel.querySelector("#dab-toggle").onclick = toggle;
-    panel.querySelector("#dab-reset").onclick = () => { cfg = presetForHost(); save(); buildSliders(); };
+    panel.querySelector("#dab-reset").onclick = () => { cfg = presetForHost(); if (bot) bot.cfg = { ...cfg }; save(); buildSliders(); };
     makeDraggable(panel, panel.querySelector("#dab-grip"));
     buildSliders();
   }
 
   const SLIDERS = [
-    ["lookMax", 0.1, 0.6, 0.01, "look-ahead"],
-    ["deadzone", 0.0, 0.15, 0.005, "deadzone"],
-    ["targetBias", -0.15, 0.15, 0.005, "aim up/down"],
-    ["velGain", 0, 14, 1, "fall predict"],
-    ["cooldownMs", 40, 250, 5, "tap cooldown"],
+    ["lookMax", 0.2, 0.6, 0.02, "look-ahead"],
+    ["gapBiasFrac", 0, 1, 0.05, "aim low ↓"],
+    ["deadzone", 0, 0.2, 0.01, "deadzone"],
+    ["velGain", 0, 6, 1, "predict"],
+    ["cooldownMs", 40, 200, 5, "cooldown"],
     ["bgTol", 20, 140, 5, "sky sens."],
-    ["obstacleColorTol", 30, 160, 5, "pipe sens."],
     ["playerColorTol", 30, 160, 5, "bird sens."],
   ];
   function buildSliders() {
@@ -410,25 +226,16 @@
       const inp = document.createElement("input");
       inp.type = "range"; inp.min = min; inp.max = max; inp.step = stp; inp.value = cfg[key];
       inp.style.flex = "1";
-      inp.oninput = () => { cfg[key] = parseFloat(inp.value); val.textContent = cfg[key]; save(); };
-      row.append(Object.assign(document.createElement("span"),
-        { textContent: label, style: "width:62px" }), inp, val);
+      inp.oninput = () => { const x = parseFloat(inp.value); cfg[key] = x; if (bot) bot.cfg[key] = x; val.textContent = x; save(); };
+      row.append(Object.assign(document.createElement("span"), { textContent: label, style: "width:64px" }), inp, val);
       box.appendChild(row);
     }
   }
 
   function makeDraggable(el, handle) {
     let sx, sy, ox, oy, drag = false;
-    handle.addEventListener("mousedown", (e) => {
-      drag = true; sx = e.clientX; sy = e.clientY;
-      const r = el.getBoundingClientRect(); ox = r.left; oy = r.top; e.preventDefault();
-    });
-    window.addEventListener("mousemove", (e) => {
-      if (!drag) return;
-      el.style.left = ox + (e.clientX - sx) + "px";
-      el.style.top = oy + (e.clientY - sy) + "px";
-      el.style.right = "auto";
-    });
+    handle.addEventListener("mousedown", (e) => { drag = true; sx = e.clientX; sy = e.clientY; const r = el.getBoundingClientRect(); ox = r.left; oy = r.top; e.preventDefault(); });
+    window.addEventListener("mousemove", (e) => { if (!drag) return; el.style.left = ox + (e.clientX - sx) + "px"; el.style.top = oy + (e.clientY - sy) + "px"; el.style.right = "auto"; });
     window.addEventListener("mouseup", () => (drag = false));
   }
 
@@ -441,18 +248,12 @@
 
   function start() {
     canvas = findCanvas();
-    running = true;
-    startTries = 0;
-    prevGray = null; player.found = false;
+    bot = Core.createBot(cfg);
+    running = true; startTries = 0; stillFrames = 0; lastY = -1; frames = 0;
     const btn = panel?.querySelector("#dab-toggle");
     if (btn) { btn.textContent = "⏸ STOP BOT"; btn.style.background = "#36c"; }
     if (cfg.autoStart) {
-      // try a few times — the Start button might appear after a beat
-      const tryStart = () => {
-        if (!running) return;
-        if (clickStart() || startTries++ > 6) return;
-        setTimeout(tryStart, 350);
-      };
+      const tryStart = () => { if (!running) return; if (clickStart() || startTries++ > 6) return; setTimeout(tryStart, 350); };
       tryStart();
     }
     cancelAnimationFrame(rafId);
@@ -475,12 +276,12 @@
       chrome.storage?.local.get(hostKey(), (r) => {
         const saved = r && r[hostKey()];
         cfg = saved ? { ...presetForHost(), ...saved } : presetForHost();
+        if (bot) bot.cfg = { ...cfg };
         if (panel) buildSliders();
       });
     } catch (e) {}
   }
 
-  // messages from popup / keyboard command
   try {
     chrome.runtime?.onMessage.addListener((msg, _s, send) => {
       if (msg?.type === "toggle") { toggle(); send?.({ running }); }
@@ -489,13 +290,7 @@
     });
   } catch (e) {}
 
-  // boot
-  function boot() {
-    buildPanel();
-    load();
-    canvas = findCanvas();
-  }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else boot();
+  function boot() { buildPanel(); load(); canvas = findCanvas(); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })();
