@@ -249,8 +249,18 @@
       playerMode: "motion", playerColor: [228, 200, 70], playerColorTol: 95,
       autoStart: true, autoRestart: true,
       autoCalibrate: true,   // learn the real bird's colour from stable blob hits, then lock on
+      train: false,          // self-tune control params from how long each life survives
+      livesPerEval: 3,       // lives averaged per candidate (flappy is noisy)
     };
   }
+
+  // Control parameters the self-trainer is allowed to tune: [min, max, step-sigma].
+  const TRAIN_KEYS = {
+    gapBiasFrac: [0.15, 0.70, 0.07],
+    velGain:     [0, 4, 0.6],
+    deadzone:    [0.02, 0.14, 0.02],
+    cooldownMs:  [55, 140, 10],
+  };
 
   // Median of an array of [r,g,b] samples (per channel).
   function medianColor(cols) {
@@ -286,12 +296,39 @@
       }
     }
 
+    // --- self-training: (1+1) evolution strategy on the control params -------
+    // Fitness = how long a life survived. Try a perturbed candidate for a few
+    // lives; if its average beats the best, adopt it. Converges to good params
+    // for whatever game we're on, from pixels + survival time alone.
+    let trainer = null;
+    function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+    function perturb(base) { const p = {}; for (const k in TRAIN_KEYS) { const [lo, hi, sg] = TRAIN_KEYS[k]; p[k] = Math.max(lo, Math.min(hi, base[k] + gauss() * sg)); } return p; }
+    function applyParams(p) { for (const k in p) self.cfg[k] = p[k]; }
+    function initTrainer() { const best = {}; for (const k in TRAIN_KEYS) best[k] = self.cfg[k]; trainer = { best, bestFit: -1, cand: null, scores: [], episodes: 0, improved: 0 }; }
+
     const self = {
       cfg: Object.assign(defaults(), cfg),
       state: st,
       reset() { st.player.found = false; lastTap = -1e9; calib = { done: false, lastX: -1, cols: [], xs: [] }; },
       analyze: (img) => analyze(img, self.cfg, st),
       decide: (v) => decide(v, self.cfg),
+      // called once per life with that life's survival fitness (e.g. frames alive)
+      onEpisodeEnd(fitness) {
+        if (!self.cfg.train) return null;
+        if (!trainer) initTrainer();
+        trainer.scores.push(fitness);
+        if (trainer.scores.length < self.cfg.livesPerEval) return null;
+        const avg = trainer.scores.reduce((a, b) => a + b, 0) / trainer.scores.length;
+        trainer.scores = [];
+        if (avg > trainer.bestFit) { trainer.best = { ...(trainer.cand || trainer.best) }; trainer.bestFit = avg; trainer.improved++; }
+        trainer.cand = perturb(trainer.best);
+        applyParams(trainer.cand);
+        trainer.episodes++;
+        const info = { best: trainer.best, bestFit: trainer.bestFit, episodes: trainer.episodes, improved: trainer.improved };
+        if (self.onLearn) self.onLearn(info);
+        return info;
+      },
+      trainingBest() { return trainer ? { best: trainer.best, bestFit: trainer.bestFit, episodes: trainer.episodes } : null; },
       // returns whether a tap should fire now, honouring the cooldown
       tick(img, nowMs) {
         const v = analyze(img, self.cfg, st);
