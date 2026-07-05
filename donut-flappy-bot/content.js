@@ -18,9 +18,10 @@
 
   // Per-site presets, merged over the core defaults when the hostname matches.
   const PRESETS = {
+    // Colour-agnostic: find the bird as the saturated floating blob at its fixed
+    // x, pipes/ground via sky-difference. Doesn't depend on guessing exact colours.
     "flappybird.io": {
-      playerMode: "color", playerColor: [228, 200, 70], playerColorTol: 95,
-      obstacleMode: "auto", bgTol: 70,
+      playerMode: "motion", obstacleMode: "auto", bgTol: 70, playerXFrac: 0.30,
     },
   };
   function presetForHost() {
