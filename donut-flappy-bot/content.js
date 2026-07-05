@@ -42,6 +42,7 @@
   let stillFrames = 0, lastY = -1, frames = 0;
   let panel, statusEl;
   let dbg = null, dctx = null;   // debug overlay canvas
+  let lastV = null, canvasReadable = null, foundCount = 0, tickCount = 0;
 
   // =========================================================================
   // Canvas discovery + pixel grab
@@ -97,14 +98,17 @@
 
     const img = grabPixels();
     if (!img) {
+      canvasReadable = false;
       setStatus("⚠ can't read canvas (cross-origin/WebGL). Blind tapping.");
       maybeTap(performance.now() % 700 < 30);   // gentle metronome fallback
       return;
     }
+    canvasReadable = true;
 
-    const { tap: want, vision: v, decision: d } = bot.tick(img, performance.now());
+    const { tap: want, vision: v, decision: d, calibrated } = bot.tick(img, performance.now());
     if (want) doTap();
     frames++;
+    lastV = { ...v, calibrated }; tickCount++; if (v.found) foundCount++;
 
     if (cfg.debug) drawDebug(v, d, want); else hideDebug();
 
@@ -243,6 +247,8 @@
       <div id="dab-status" style="margin:7px 0;font-size:11px;color:#9fe">idle</div>
       <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:4px;cursor:pointer">
         <input type="checkbox" id="dab-debug"> show vision (debug overlay)</label>
+      <button id="dab-diag" style="width:100%;margin-bottom:6px;padding:5px;border:0;border-radius:6px;
+        background:#2a6;color:#fff;font-size:11px;cursor:pointer">copy diagnostics</button>
       <details><summary style="cursor:pointer;color:#ffb">tuning</summary>
         <div id="dab-sliders" style="margin-top:6px"></div>
         <button id="dab-reset" style="width:100%;margin-top:6px;padding:4px;border:0;
@@ -255,6 +261,7 @@
     const dbgBox = panel.querySelector("#dab-debug");
     dbgBox.checked = !!cfg.debug;
     dbgBox.onchange = () => { cfg.debug = dbgBox.checked; if (!cfg.debug) hideDebug(); save(); };
+    panel.querySelector("#dab-diag").onclick = copyDiagnostics;
     panel.querySelector("#dab-reset").onclick = () => { cfg = presetForHost(); if (bot) bot.cfg = { ...cfg }; save(); buildSliders(); };
     makeDraggable(panel, panel.querySelector("#dab-grip"));
     buildSliders();
@@ -295,6 +302,40 @@
   }
 
   function setStatus(s) { if (statusEl) statusEl.textContent = s; }
+
+  // Gather a compact diagnostic snapshot so the user can send me what the bot
+  // actually sees on a page I can't reach. Samples a vertical strip at the bird's
+  // column so I can see the real bird / pipe / sky colours.
+  function copyDiagnostics() {
+    const cnv = canvas || findCanvas();
+    const diag = {
+      host: location.hostname, href: location.href,
+      canvasFound: !!cnv,
+      canvas: cnv ? { attrW: cnv.width, attrH: cnv.height, cssW: Math.round(cnv.getBoundingClientRect().width), cssH: Math.round(cnv.getBoundingClientRect().height) } : null,
+      canvasReadable, running,
+      bufferSize: off ? { w: off.width, h: off.height } : null,
+      birdFoundRate: tickCount ? +(foundCount / tickCount).toFixed(2) : null,
+      cfg: bot ? { playerMode: bot.cfg.playerMode, playerColor: bot.cfg.playerColor, playerXFrac: +bot.cfg.playerXFrac.toFixed(2), bgTol: bot.cfg.bgTol } : null,
+      vision: lastV ? { found: lastV.found, px: lastV.px, py: lastV.py, sky: lastV.sky?.map((n) => n | 0), floor: lastV.floor, haveGap: lastV.haveGap, gapTop: lastV.gapTop, gapBottom: lastV.gapBottom, calibrated: lastV.calibrated } : null,
+    };
+    // sample a vertical colour strip down the bird's column
+    if (off && octx) {
+      try {
+        const bx = Math.round((lastV?.px ?? off.width * 0.3));
+        const strip = [];
+        for (let f = 0.05; f < 1; f += 0.1) {
+          const y = Math.round(off.height * f);
+          const d = octx.getImageData(bx, y, 1, 1).data;
+          strip.push([Math.round(off.height * f), [d[0], d[1], d[2]]]);
+        }
+        diag.columnStrip = strip;
+      } catch (e) { diag.columnStrip = "unreadable"; }
+    }
+    const text = JSON.stringify(diag, null, 2);
+    try { navigator.clipboard.writeText(text); } catch (e) {}
+    console.log("[DonutBot] diagnostics:\n" + text);
+    setStatus("diagnostics copied to clipboard + console");
+  }
 
   // =========================================================================
   // lifecycle

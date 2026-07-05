@@ -248,26 +248,58 @@
       obstacleMode: "auto", obstacleColor: [86, 170, 60], obstacleColorTol: 95,
       playerMode: "motion", playerColor: [228, 200, 70], playerColorTol: 95,
       autoStart: true, autoRestart: true,
+      autoCalibrate: true,   // learn the real bird's colour from stable blob hits, then lock on
     };
+  }
+
+  // Median of an array of [r,g,b] samples (per channel).
+  function medianColor(cols) {
+    const ch = (k) => { const a = cols.map((c) => c[k]).sort((p, q) => p - q); return a[a.length >> 1]; };
+    return [ch(0), ch(1), ch(2)];
   }
 
   // Stateful bot wrapper. tick(img, nowMs) -> { tap, vision, decision }.
   function createBot(cfg) {
     const st = { player: { x: 0, y: 0, vy: 0, found: false } };
     let lastTap = -1e9;
+    let calib = { done: false, lastX: -1, cols: [], xs: [] };
+
+    // Watch the colour-agnostic blob detector; once it reports the bird at a
+    // stable x for enough frames, learn its median colour and lock onto colour
+    // tracking. This adapts to the real game's bird without any hardcoded colour.
+    function calibrate(img, v) {
+      const c = self.cfg;
+      if (!c.autoCalibrate || c.playerMode === "color" || calib.done || !v.found) return;
+      const { data, width: w } = img;
+      const i = (v.py * w + v.px) * 4;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      if ((mx - mn) / (mx + 1) < 0.18) { calib.cols.length = 0; calib.xs.length = 0; return; } // skip washed-out
+      if (calib.lastX >= 0 && Math.abs(v.px - calib.lastX) > 0.04 * w) { calib.cols.length = 0; calib.xs.length = 0; }
+      calib.lastX = v.px; calib.cols.push([r, g, b]); calib.xs.push(v.px / w);
+      if (calib.cols.length >= 24) {
+        c.playerColor = medianColor(calib.cols);
+        c.playerColorTol = 100;
+        c.playerXFrac = calib.xs.sort((p, q) => p - q)[calib.xs.length >> 1];
+        c.playerMode = "color";
+        calib.done = true;
+      }
+    }
+
     const self = {
       cfg: Object.assign(defaults(), cfg),
       state: st,
-      reset() { st.player.found = false; lastTap = -1e9; },
+      reset() { st.player.found = false; lastTap = -1e9; calib = { done: false, lastX: -1, cols: [], xs: [] }; },
       analyze: (img) => analyze(img, self.cfg, st),
       decide: (v) => decide(v, self.cfg),
       // returns whether a tap should fire now, honouring the cooldown
       tick(img, nowMs) {
         const v = analyze(img, self.cfg, st);
+        calibrate(img, v);
         const d = decide(v, self.cfg);
         let tap = false;
         if (d.tap && nowMs - lastTap >= self.cfg.cooldownMs) { tap = true; lastTap = nowMs; }
-        return { tap, vision: v, decision: d };
+        return { tap, vision: v, decision: d, calibrated: calib.done };
       },
     };
     return self;
