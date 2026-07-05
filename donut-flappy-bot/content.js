@@ -30,7 +30,7 @@
   }
   function hostKey() { return "donutCfg:" + location.hostname; }
 
-  let cfg = presetForHost();
+  let cfg = { debug: false, ...presetForHost() };
 
   // ---- state ----------------------------------------------------------------
   let running = false;
@@ -40,6 +40,7 @@
   let rafId = 0, startTries = 0;
   let stillFrames = 0, lastY = -1, frames = 0;
   let panel, statusEl;
+  let dbg = null, dctx = null;   // debug overlay canvas
 
   // =========================================================================
   // Canvas discovery + pixel grab
@@ -100,9 +101,11 @@
       return;
     }
 
-    const { tap: want, vision: v } = bot.tick(img, performance.now());
+    const { tap: want, vision: v, decision: d } = bot.tick(img, performance.now());
     if (want) doTap();
     frames++;
+
+    if (cfg.debug) drawDebug(v, d, want); else hideDebug();
 
     // auto-restart: if the bird stops moving (or vanishes) for ~1.3s, the game is
     // over — press Start again to keep racking up score.
@@ -119,6 +122,52 @@
   }
 
   function maybeTap(want) { if (want) doTap(); }
+
+  // =========================================================================
+  // Debug overlay — draws what the bot sees onto the game, for diagnosis
+  // =========================================================================
+  function hideDebug() { if (dbg) dbg.style.display = "none"; }
+  function drawDebug(v, d, tapped) {
+    if (!canvas) return;
+    const r = canvas.getBoundingClientRect();
+    if (!dbg) {
+      dbg = document.createElement("canvas");
+      dbg.style.cssText = "position:fixed;z-index:2147483646;pointer-events:none;";
+      document.documentElement.appendChild(dbg);
+      dctx = dbg.getContext("2d");
+    }
+    dbg.style.display = "block";
+    dbg.style.left = r.left + "px"; dbg.style.top = r.top + "px";
+    dbg.style.width = r.width + "px"; dbg.style.height = r.height + "px";
+    if (dbg.width !== Math.round(r.width) || dbg.height !== Math.round(r.height)) {
+      dbg.width = Math.round(r.width); dbg.height = Math.round(r.height);
+    }
+    const sx = dbg.width / v.w, sy = dbg.height / v.h;
+    dctx.clearRect(0, 0, dbg.width, dbg.height);
+
+    // floor line
+    dctx.strokeStyle = "rgba(255,180,0,.8)"; dctx.lineWidth = 2;
+    line(0, v.floor * sy, dbg.width, v.floor * sy);
+    // gap band + aim
+    if (v.haveGap) {
+      dctx.strokeStyle = "rgba(0,220,120,.9)";
+      line(0, v.gapTop * sy, dbg.width, v.gapTop * sy);
+      line(0, v.gapBottom * sy, dbg.width, v.gapBottom * sy);
+      dctx.strokeStyle = "rgba(0,120,255,.9)";
+      if (d.aim != null) line(0, d.aim * sy, dbg.width, d.aim * sy);
+      if (v.obstacleX >= 0) { dctx.strokeStyle = "rgba(255,0,180,.7)"; line(v.obstacleX * sx, 0, v.obstacleX * sx, dbg.height); }
+    }
+    // bird marker
+    dctx.strokeStyle = v.found ? "#00e0ff" : "#ff3b3b"; dctx.lineWidth = 3;
+    dctx.beginPath(); dctx.arc(v.px * sx, v.py * sy, 12, 0, 7); dctx.stroke();
+    // label
+    dctx.fillStyle = "rgba(0,0,0,.6)"; dctx.fillRect(4, 4, 210, 46);
+    dctx.fillStyle = "#fff"; dctx.font = "12px monospace";
+    dctx.fillText(`${v.found ? "bird" : "NO BIRD"} y=${v.py} vy=${v.vy.toFixed(1)} ${tapped ? "TAP" : ""}`, 8, 20);
+    dctx.fillText(`${d.reason}  ${v.haveGap ? "gap[" + v.gapTop + "-" + v.gapBottom + "]" : "no gap"}`, 8, 34);
+    dctx.fillText(`sky=[${v.sky.map((n) => n | 0)}] floor=${v.floor}`, 8, 46);
+  }
+  function line(x1, y1, x2, y2) { dctx.beginPath(); dctx.moveTo(x1, y1); dctx.lineTo(x2, y2); dctx.stroke(); }
 
   // =========================================================================
   // Input synthesis — cover pointer / mouse / touch / keyboard
@@ -191,6 +240,8 @@
       <button id="dab-toggle" style="width:100%;padding:7px;border:0;border-radius:7px;
         background:#ff4fb8;color:#fff;font-weight:700;cursor:pointer">▶ START BOT</button>
       <div id="dab-status" style="margin:7px 0;font-size:11px;color:#9fe">idle</div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:4px;cursor:pointer">
+        <input type="checkbox" id="dab-debug"> show vision (debug overlay)</label>
       <details><summary style="cursor:pointer;color:#ffb">tuning</summary>
         <div id="dab-sliders" style="margin-top:6px"></div>
         <button id="dab-reset" style="width:100%;margin-top:6px;padding:4px;border:0;
@@ -200,6 +251,9 @@
     document.documentElement.appendChild(panel);
     statusEl = panel.querySelector("#dab-status");
     panel.querySelector("#dab-toggle").onclick = toggle;
+    const dbgBox = panel.querySelector("#dab-debug");
+    dbgBox.checked = !!cfg.debug;
+    dbgBox.onchange = () => { cfg.debug = dbgBox.checked; if (!cfg.debug) hideDebug(); save(); };
     panel.querySelector("#dab-reset").onclick = () => { cfg = presetForHost(); if (bot) bot.cfg = { ...cfg }; save(); buildSliders(); };
     makeDraggable(panel, panel.querySelector("#dab-grip"));
     buildSliders();
@@ -264,6 +318,7 @@
   function stop() {
     running = false;
     cancelAnimationFrame(rafId);
+    hideDebug();
     const btn = panel?.querySelector("#dab-toggle");
     if (btn) { btn.textContent = "▶ START BOT"; btn.style.background = "#ff4fb8"; }
     setStatus("stopped");

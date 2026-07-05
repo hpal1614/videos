@@ -211,6 +211,10 @@
   // scale with the gap height so this adapts to whatever game we're on.
   function decide(v, cfg) {
     if (!v.found) return { tap: false, reason: "no-bird" };
+    // FAILSAFE: never flap while already high on the screen. If detection is off
+    // (wrong sky/floor on some page) the controller could otherwise tap every
+    // frame and pin the bird to the ceiling. This guarantees it can't.
+    if (v.py < v.h * cfg.ceilingStop) return { tap: false, reason: "ceiling-stop" };
     const predicted = v.py + v.vy * cfg.velGain;   // short gravity-aware look-ahead
     if (v.haveGap) {
       const gapH = Math.max(8, v.gapBottom - v.gapTop);
@@ -220,9 +224,10 @@
       if (predicted > aim + dead && v.py > ceilingGuard) return { tap: true, reason: "below-aim", aim };
       return { tap: false, reason: "hold", aim };
     }
-    // no pipe in view: hover just above the floor so we don't smash it
-    const floorAim = (v.floor || v.h) * 0.78;
-    if (predicted > floorAim) return { tap: true, reason: "hover" };
+    // no pipe in view: hover just above the floor. Guard against a bogus floor
+    // (detection failure) by falling back to a sane fraction of the screen.
+    const fl = v.floor && v.floor > v.h * 0.5 ? v.floor : v.h * 0.9;
+    if (predicted > fl * 0.78) return { tap: true, reason: "hover" };
     return { tap: false, reason: "glide" };
   }
 
@@ -237,6 +242,7 @@
       edgeMargin: 0.15,    // suppress flap within this much of the top pipe (frac of gap)
       velGain: 1,          // small look-ahead for the fall prediction (frames)
       cooldownMs: 90,
+      ceilingStop: 0.10,   // never flap when the bird is in the top this-fraction of the screen
       topPipeMin: 0.04, botPipeMin: 0.04,   // min ceiling/floor pipe depth (frac of h)
       bgTol: 70,
       obstacleMode: "auto", obstacleColor: [86, 170, 60], obstacleColorTol: 95,
